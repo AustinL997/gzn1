@@ -1,75 +1,121 @@
-import os
 import json
-from telegram import Update
+import os
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackContext,
+    CallbackQueryHandler,
     MessageHandler,
-    ContextTypes,
     filters,
 )
+from datetime import datetime
+import asyncio
+import nest_asyncio
+
+# Apply fix for already-running event loops (like in Render)
+nest_asyncio.apply()
+
+# Logging setup
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+
+# Your Telegram Bot Token
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 DB_FILE = "db.json"
 
+# Utility functions
 def load_data():
     try:
-        with open(DB_FILE, 'r') as f:
+        with open(DB_FILE, "r") as f:
             return json.load(f)
-    except:
-        return {"videos": []}
+    except FileNotFoundError:
+        return {}
 
 def save_data(data):
-    with open(DB_FILE, 'w') as f:
+    with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi! 👋 Send a TikTok link with hashtags like #food or #shopping to save it.")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user = update.effective_user.username or str(update.effective_user.id)
-
-    if "tiktok.com" in text:
-        tags = [w.strip("#") for w in text.split() if w.startswith("#")]
-        entry = {
-            "url": text,
-            "tags": tags,
-            "user": user
+def ensure_user(data, user_id):
+    if user_id not in data:
+        data[user_id] = {
+            "entries": [],
         }
-        data = load_data()
-        data["videos"].append(entry)
-        save_data(data)
-        await update.message.reply_text(f"✅ Saved TikTok with tags: {', '.join(tags)}")
-    else:
-        await update.message.reply_text("❗ Please send a TikTok link with hashtags (e.g. #food, #shopping)")
 
-async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args:
-        keyword = context.args[0].lower()
-        data = load_data()
-        matches = [
-            v["url"] for v in data["videos"]
-            if keyword in [t.lower() for t in v["tags"]]
-        ]
-        if matches:
-            await update.message.reply_text("🔍 Results:\n" + "\n".join(matches))
-        else:
-            await update.message.reply_text("❌ No matches found.")
-    else:
-        await update.message.reply_text("Usage: /search <keyword>")
+# Bot handlers
+async def start(update: Update, context: CallbackContext):
+    await update.message.reply_text(
+        "Send me a TikTok link with optional tags or notes. Example:\n"
+        "https://www.tiktok.com/@user/video/1234567890\n"
+        "Tags: #food #dessert\n"
+        "Note: Looks tasty!"
+    )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+async def handle_message(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    text = update.message.text.strip()
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("search", search))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    if "tiktok.com" not in text:
+        await update.message.reply_text("Please send a valid TikTok link.")
+        return
 
-import asyncio
+    data = load_data()
+    ensure_user(data, user_id)
+
+    entry = {
+        "url": text,
+        "timestamp": datetime.now().isoformat(),
+    }
+    data[user_id]["entries"].append(entry)
+    save_data(data)
+
+    await update.message.reply_text("Saved your TikTok!")
+
+async def list_entries(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    data = load_data()
+
+    if user_id not in data or not data[user_id]["entries"]:
+        await update.message.reply_text("You haven't saved any TikToks yet.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(f"Item {i+1}", callback_data=f"view_{i}")]
+        for i in range(len(data[user_id]["entries"]))
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Select an item to view:", reply_markup=reply_markup)
+
+async def view_entry(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = str(query.from_user.id)
+    index = int(query.data.split("_")[1])
+    data = load_data()
+
+    try:
+        entry = data[user_id]["entries"][index]
+        text = f"📌 TikTok #{index+1}\n{entry['url']}\n🕒 {entry['timestamp']}"
+        await query.edit_message_text(text)
+    except IndexError:
+        await query.edit_message_text("Invalid entry.")
 
 async def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("list", list_entries))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(view_entry))
+
     print("🚀 Bot is running on Render...")
     await app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
+

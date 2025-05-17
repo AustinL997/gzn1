@@ -58,7 +58,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Usage: /search <keyword>")
 
-BOT_TOKEN = os.getenv("7702750295:AAGhw52BBclmbMEcZ9cA3YDk3TQbdhFGETg")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))

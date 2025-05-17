@@ -21,7 +21,7 @@ def load_data():
 def save_data(data):
     with open(DB_FILE, 'w') as f:
         json.dump(data, f, indent=2)
-p
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hi! 👋 Send a TikTok link with hashtags like #food or #shopping to save it.")
 

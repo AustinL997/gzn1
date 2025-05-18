@@ -54,7 +54,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def addvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Please send me the video URL you want to add, with optional hashtags.\nExample: https://www.tiktok.com/... #food #hotpot"
+        "📥 Please send the video URL with hashtags.\n\n"
+        "✅ Make sure to include:\n"
+        "• A city: #gz or #sz\n"
+        "• A category: #toeat, #toexplore, or #tobuy\n"
+        "• Any extra tags like #hotpot, #plussize, etc.\n\n"
+        "📌 Example:\n"
+        "https://www.tiktok.com/... #gz #toeat #hotpot"
     )
     context.user_data['expecting_video'] = True
 
@@ -92,9 +98,13 @@ async def list_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for v in videos:
                     line = f"      {v['url']} {' '.join(v.get('hashtags', []))}"
                     reply_lines.append(line)
+                reply_lines.append("")  # Add space between tag groups
+            reply_lines.append("")  # Add space between categories
+        reply_lines.append("")  # Add space between cities
 
-    reply_text = "\n".join(reply_lines)
+    reply_text = "\n".join(reply_lines).strip()
     await update.message.reply_text(reply_text)
+
 
 async def search_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args

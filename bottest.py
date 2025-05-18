@@ -7,6 +7,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
 import logging
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 
@@ -60,13 +61,40 @@ async def addvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not video_storage:
         await update.message.reply_text("No videos saved yet. Use /addvideo to add some.")
-    else:
-        videos_text = "\n\n".join(
-            f"{idx+1}. {item['url']} {' '.join(item.get('hashtags', []))}" 
-            for idx, item in enumerate(video_storage)
-        )
-        await update.message.reply_text(f"Here are your saved videos:\n\n{videos_text}")
-    await update.message.reply_text("You can add more videos with /addvideo or get help with /help.")
+        return
+
+    grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+
+    for video in video_storage:
+        hashtags = video.get("hashtags", [])
+        hashtags_lower = [h.lower() for h in hashtags]
+
+        city_tag = next((tag for tag in hashtags_lower if tag in ["#gz", "#sz"]), None)
+        if not city_tag:
+            city_tag = "#unknown"
+
+        nature_tag = next((tag for tag in hashtags_lower if tag in ["#toexplore", "#toeat", "#tobuy"]), None)
+        if not nature_tag:
+            nature_tag = "#unknown"
+
+        other_tags = [tag for tag in hashtags_lower if tag not in [city_tag, nature_tag]]
+        other_tags_key = " ".join(sorted(other_tags)) if other_tags else "#none"
+
+        grouped[city_tag][nature_tag][other_tags_key].append(video)
+
+    reply_lines = []
+    for city, city_data in grouped.items():
+        reply_lines.append(f"City: {city}")
+        for nature, nature_data in city_data.items():
+            reply_lines.append(f"  Category: {nature}")
+            for tags_group, videos in nature_data.items():
+                reply_lines.append(f"    Tags: {tags_group}")
+                for v in videos:
+                    line = f"      {v['url']} {' '.join(v.get('hashtags', []))}"
+                    reply_lines.append(line)
+
+    reply_text = "\n".join(reply_lines)
+    await update.message.reply_text(reply_text)
 
 async def search_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args

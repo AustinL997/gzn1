@@ -141,6 +141,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.startswith("http"):
             url = text.split()[0]
             hashtags = [word for word in text.split() if word.startswith("#")]
+            hashtags = [replace_hashtags(tag) for tag in hashtags]  # Replace full names with simplified hashtags
             video_storage.append({"url": url, "hashtags": hashtags})
             with open(DB_FILE, "w") as f:
                 json.dump({"videos": video_storage}, f, indent=2)
@@ -153,6 +154,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.startswith("http"):
             url = text.split()[0]
             hashtags = [word for word in text.split() if word.startswith("#")]
+            hashtags = [replace_hashtags(tag) for tag in hashtags]  # Replace full names with simplified hashtags
             video_storage[index] = {"url": url, "hashtags": hashtags}
             with open(DB_FILE, "w") as f:
                 json.dump({"videos": video_storage}, f, indent=2)
@@ -162,6 +164,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del context.user_data['editing_video_index']
     else:
         await update.message.reply_text(f"Received: {text}\nUse /help for instructions.")
+
+def replace_hashtags(tag):
+    """Replace full city names with simplified hashtags."""
+    replacements = {
+        "#guangzhou": "#gz",
+        "#shenzhen": "#sz"
+    }
+    return replacements.get(tag.lower(), tag)
 
 # === Minimal HTTP server for Render ===
 async def handle_root(request):

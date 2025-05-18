@@ -32,6 +32,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/addvideo - Add a new video to your itinerary\n"
         "/list - List all saved videos\n"
         "/search - Search videos by hashtags (e.g., /search #food #hotpot)\n"
+        "/deletevideo - Delete a video by its number (e.g., /deletevideo 2)\n"
+        "/editvideo - Edit a video by its number (e.g., /editvideo 3)\n"
         "/clear - Clear bot messages from the chat\n"
         "/help - Get help instructions"
     )
@@ -43,8 +45,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   Example: https://www.tiktok.com/... #food #hotpot\n"
         "2. Use /list to see your saved videos.\n"
         "3. Use /search followed by hashtags to find videos. Example: /search #food #hotpot\n"
-        "4. Use /clear to delete bot messages from the chat.\n"
-        "5. Use /start to see the main menu anytime."
+        "4. Use /deletevideo followed by the video number to delete. Example: /deletevideo 2\n"
+        "5. Use /editvideo followed by the video number to edit. Example: /editvideo 3\n"
+        "6. Use /clear to delete bot messages from the chat.\n"
+        "7. Use /start to see the main menu anytime."
     )
 
 async def addvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,11 +91,40 @@ async def search_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = "\n\n".join(f"{v['url']} {' '.join(v['hashtags'])}" for v in results)
         await update.message.reply_text(f"Results for {' '.join(search_tags)}:\n\n{reply}")
 
+async def deletevideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Please provide the video number to delete. Example: /deletevideo 2")
+        return
+
+    index = int(args[0]) - 1
+    if 0 <= index < len(video_storage):
+        removed_video = video_storage.pop(index)
+        with open(DB_FILE, "w") as f:
+            json.dump({"videos": video_storage}, f, indent=2)
+        await update.message.reply_text(f"✅ Removed video: {removed_video['url']}")
+    else:
+        await update.message.reply_text("❌ Invalid video number. Use /list to see available videos.")
+
+async def editvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Please provide the video number to edit. Example: /editvideo 3")
+        return
+
+    index = int(args[0]) - 1
+    if 0 <= index < len(video_storage):
+        context.user_data['editing_video_index'] = index
+        await update.message.reply_text(
+            f"Please send the new video URL and hashtags for video {index + 1}.\nExample: https://www.tiktok.com/... #newtag"
+        )
+    else:
+        await update.message.reply_text("❌ Invalid video number. Use /list to see available videos.")
+
 async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     bot = context.bot
 
-    # Fetch recent messages sent by the bot
     async for message in bot.get_chat_history(chat_id=chat.id, limit=100):
         if message.from_user and message.from_user.id == bot.id:
             try:
@@ -109,13 +142,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             url = text.split()[0]
             hashtags = [word for word in text.split() if word.startswith("#")]
             video_storage.append({"url": url, "hashtags": hashtags})
-            # Save back to file with {"videos": [...]}
             with open(DB_FILE, "w") as f:
                 json.dump({"videos": video_storage}, f, indent=2)
             await update.message.reply_text("✅ Video added successfully! Use /list to view or /search to find by hashtag.")
         else:
             await update.message.reply_text("❌ That doesn't look like a valid URL. Please send a correct video link.")
         context.user_data['expecting_video'] = False
+    elif 'editing_video_index' in context.user_data:
+        index = context.user_data['editing_video_index']
+        if text.startswith("http"):
+            url = text.split()[0]
+            hashtags = [word for word in text.split() if word.startswith("#")]
+            video_storage[index] = {"url": url, "hashtags": hashtags}
+            with open(DB_FILE, "w") as f:
+                json.dump({"videos": video_storage}, f, indent=2)
+            await update.message.reply_text(f"✅ Video {index + 1} updated successfully!")
+        else:
+            await update.message.reply_text("❌ That doesn't look like a valid URL. Please send a correct video link.")
+        del context.user_data['editing_video_index']
     else:
         await update.message.reply_text(f"Received: {text}\nUse /help for instructions.")
 
@@ -143,6 +187,8 @@ async def main():
     app.add_handler(CommandHandler("addvideo", addvideo))
     app.add_handler(CommandHandler("list", list_videos))
     app.add_handler(CommandHandler("search", search_videos))
+    app.add_handler(CommandHandler("deletevideo", deletevideo))
+    app.add_handler(CommandHandler("editvideo", editvideo))
     app.add_handler(CommandHandler("clear", clear_chat))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

@@ -1,114 +1,119 @@
 import os
 import json
 import logging
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters
 )
 
+# === Setup Logging ===
 logging.basicConfig(level=logging.INFO)
 
+# === Load Token from Environment ===
 TOKEN = os.getenv("TOKEN")
-DB_FILE = "db.json"
-
 if not TOKEN:
     raise ValueError("TOKEN not set in environment")
 
-# Load or initialize database
-def load_db():
-    if not os.path.exists(DB_FILE):
-        with open(DB_FILE, "w") as f:
-            json.dump({}, f)
+# === Load or Initialize JSON Database ===
+DB_FILE = "db.json"
+if os.path.exists(DB_FILE):
     with open(DB_FILE, "r") as f:
-        return json.load(f)
+        video_db = json.load(f)
+else:
+    video_db = {}
 
-def save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-# Start
+# === /start Command ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("➕ Add Video", callback_data="add")],
-        [InlineKeyboardButton("📄 List All Videos", callback_data="list")]
-    ]
     await update.message.reply_text(
-        "👋 Welcome to the Guangzhou trip bot!\n\nYou can:\n- Add videos with hashtags (e.g. #food, #togo)\n- List all saved videos\n- Search by sending a hashtag (e.g. #hotpot)",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "👋 Welcome to @gzn1_bot!\n\n"
+        "Use the buttons below to get started:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add Video", callback_data="add_video")],
+            [InlineKeyboardButton("📋 List Videos", callback_data="list_videos")],
+            [InlineKeyboardButton("🔍 Search by Hashtag", callback_data="search_hashtag")]
+        ])
     )
 
-# Handle button actions
+# === Handle Callback Buttons ===
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user_id = str(query.from_user.id)
-    context.user_data["awaiting_input"] = query.data
-
-    if query.data == "add":
-        await query.message.reply_text("📎 Send the video link and include hashtags (e.g. https://tiktok.com/... #food #hotpot)")
-    elif query.data == "list":
-        db = load_db()
-        messages = []
-        for uid, items in db.items():
-            for item in items:
-                tags = " ".join(item.get("hashtags", []))
-                messages.append(f"{item['url']} {tags}")
-        if messages:
-            await query.message.reply_text("\n\n".join(messages[:20]))  # show max 20 results
+    if query.data == "add_video":
+        context.user_data["mode"] = "add"
+        await query.message.reply_text("📎 Please send me a TikTok or Xiaohongshu video link with optional hashtags.\n\nExample:\nhttps://www.tiktok.com/... #food #hotpot")
+    elif query.data == "list_videos":
+        user_id = str(query.from_user.id)
+        videos = video_db.get(user_id, [])
+        if not videos:
+            await query.message.reply_text("You haven’t saved any videos yet!")
         else:
-            await query.message.reply_text("No videos saved yet!")
+            reply = "\n\n".join(f"{idx+1}. {v['url']} {' '.join(v['hashtags'])}" for idx, v in enumerate(videos))
+            await query.message.reply_text("📋 Your videos:\n\n" + reply)
+    elif query.data == "search_hashtag":
+        context.user_data["mode"] = "search"
+        await query.message.reply_text("🔍 Send me a hashtag to search (e.g., #food or #togo)")
 
-# Add videos with hashtags
+# === Handle Messages ===
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    text = update.message.text.strip()
-    db = load_db()
+    user_id = str(update.effective_user.id)
+    message = update.message.text.strip()
+    mode = context.user_data.get("mode")
 
-    if context.user_data.get("awaiting_input") == "add":
-        if "http" not in text:
-            await update.message.reply_text("⚠️ Please include a valid link starting with http")
+    if mode == "add":
+        url = message.split()[0]
+        hashtags = [word for word in message.split() if word.startswith("#")]
+        if not url.startswith("http"):
+            await update.message.reply_text("⚠️ Please include a valid video link.")
             return
 
-        hashtags = [word for word in text.split() if word.startswith("#")]
-        video_url = text.split()[0]
+        video_db.setdefault(user_id, []).append({"url": url, "hashtags": hashtags})
+        with open(DB_FILE, "w") as f:
+            json.dump(video_db, f)
 
-        if user_id not in db:
-            db[user_id] = []
-        db[user_id].append({
-            "url": video_url,
-            "hashtags": hashtags
-        })
-        save_db(db)
+        await update.message.reply_text("✅ Video saved!\n\nUse /start to add or search again.")
+        context.user_data["mode"] = None
 
-        await update.message.reply_text("✅ Video saved!\nYou can now search using hashtags like #food or #togo.")
-        context.user_data["awaiting_input"] = None
-    else:
-        # Hashtag search
-        if text.startswith("#"):
-            db = load_db()
-            results = []
-            for items in db.values():
-                for item in items:
-                    if text in item.get("hashtags", []):
-                        results.append(f"{item['url']} {' '.join(item['hashtags'])}")
-            if results:
-                await update.message.reply_text("\n\n".join(results[:20]))
-            else:
-                await update.message.reply_text("❌ No results found for that hashtag.")
+    elif mode == "search":
+        tag = message.lower()
+        found = []
+        for entry in video_db.get(user_id, []):
+            if tag in (h.lower() for h in entry.get("hashtags", [])):
+                found.append(entry)
+
+        if not found:
+            await update.message.reply_text("❌ No videos found with that hashtag.")
         else:
-            await update.message.reply_text("🤖 Please use the menu or type a hashtag (e.g. #food) to search.")
+            reply = "\n\n".join(f"{v['url']} {' '.join(v['hashtags'])}" for v in found)
+            await update.message.reply_text(f"🔍 Results for {tag}:\n\n" + reply)
 
-# Main
-def main():
+        context.user_data["mode"] = None
+    else:
+        await update.message.reply_text("❓ Please use /start and choose an option.")
+
+# === Run Bot in Background Thread ===
+def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
     app.run_polling()
 
+# === Dummy Web Server to Bind Port ===
+def run_web_server():
+    dummy_app = Flask(__name__)
+
+    @dummy_app.route('/')
+    def home():
+        return "✅ Bot is alive!"
+
+    port = int(os.environ.get("PORT", 5000))
+    dummy_app.run(host="0.0.0.0", port=port)
+
+# === Run Both in Parallel ===
 if __name__ == "__main__":
-    main()
+    threading.Thread(target=run_bot).start()
+    run_web_server()

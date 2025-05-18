@@ -20,7 +20,7 @@ DB_FILE = "db.json"
 if os.path.exists(DB_FILE):
     with open(DB_FILE, "r") as f:
         data = json.load(f)
-        video_storage = data.get("videos", [])  # Extract the list under "videos"
+        video_storage = data.get("videos", [])
 else:
     video_storage = []
 
@@ -31,7 +31,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Here are some commands you can try:\n"
         "/addvideo - Add a new video to your itinerary\n"
         "/list - List all saved videos\n"
-        "/search - Search videos by hashtag (e.g., #food)\n"
+        "/search - Search videos by hashtags (e.g., /search #food #hotpot)\n"
+        "/clear - Clear bot messages from the chat\n"
         "/help - Get help instructions"
     )
 
@@ -41,13 +42,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. Use /addvideo to add a video link. After this command, send me the video URL with optional hashtags.\n"
         "   Example: https://www.tiktok.com/... #food #hotpot\n"
         "2. Use /list to see your saved videos.\n"
-        "3. Use /search to find videos by hashtag.\n"
-        "4. Use /start to see the main menu anytime."
+        "3. Use /search followed by hashtags to find videos. Example: /search #food #hotpot\n"
+        "4. Use /clear to delete bot messages from the chat.\n"
+        "5. Use /start to see the main menu anytime."
     )
 
 async def addvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Please send me the video URL you want to add, with optional hashtags.\nExample: https://www.tiktok.com/... #food #togo"
+        "Please send me the video URL you want to add, with optional hashtags.\nExample: https://www.tiktok.com/... #food #hotpot"
     )
     context.user_data['expecting_video'] = True
 
@@ -63,8 +65,41 @@ async def list_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("You can add more videos with /addvideo or get help with /help.")
 
 async def search_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send a hashtag to search (e.g., #food, #togo, #tobuy).")
-    context.user_data['expecting_search'] = True
+    args = context.args
+    if not args:
+        await update.message.reply_text("Please provide at least one hashtag to search. Example: /search #food #hotpot")
+        return
+
+    search_tags = [tag.lower() for tag in args if tag.startswith("#")]
+    if not search_tags:
+        await update.message.reply_text("Please provide valid hashtags starting with '#'.")
+        return
+
+    results = []
+    for video in video_storage:
+        video_tags = [h.lower() for h in video.get("hashtags", [])]
+        if all(tag in video_tags for tag in search_tags):
+            results.append(video)
+
+    if not results:
+        await update.message.reply_text("No videos found with the specified hashtags.")
+    else:
+        reply = "\n\n".join(f"{v['url']} {' '.join(v['hashtags'])}" for v in results)
+        await update.message.reply_text(f"Results for {' '.join(search_tags)}:\n\n{reply}")
+
+async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    bot = context.bot
+
+    # Fetch recent messages sent by the bot
+    async for message in bot.get_chat_history(chat_id=chat.id, limit=100):
+        if message.from_user and message.from_user.id == bot.id:
+            try:
+                await bot.delete_message(chat_id=chat.id, message_id=message.message_id)
+            except Exception as e:
+                logging.warning(f"Failed to delete message {message.message_id}: {e}")
+
+    await update.message.reply_text("Bot messages have been cleared from the chat.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -81,17 +116,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ That doesn't look like a valid URL. Please send a correct video link.")
         context.user_data['expecting_video'] = False
-
-    elif context.user_data.get('expecting_search'):
-        tag = text.lower()
-        results = [v for v in video_storage if tag in [h.lower() for h in v.get("hashtags", [])]]
-        if not results:
-            await update.message.reply_text("❌ No videos found with that hashtag.")
-        else:
-            reply = "\n\n".join(f"{v['url']} {' '.join(v['hashtags'])}" for v in results)
-            await update.message.reply_text(f"🔍 Results for {tag}:\n\n{reply}")
-        context.user_data['expecting_search'] = False
-
     else:
         await update.message.reply_text(f"Received: {text}\nUse /help for instructions.")
 
@@ -119,6 +143,7 @@ async def main():
     app.add_handler(CommandHandler("addvideo", addvideo))
     app.add_handler(CommandHandler("list", list_videos))
     app.add_handler(CommandHandler("search", search_videos))
+    app.add_handler(CommandHandler("clear", clear_chat))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await app.initialize()

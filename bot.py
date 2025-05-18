@@ -1,104 +1,114 @@
 import os
-import asyncio
-from aiohttp import web
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-)
+import json
 import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
+)
 
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TOKEN")
+DB_FILE = "db.json"
+
 if not TOKEN:
     raise ValueError("TOKEN not set in environment")
 
-# In-memory storage for example
-video_storage = []
+# Load or initialize database
+def load_db():
+    if not os.path.exists(DB_FILE):
+        with open(DB_FILE, "w") as f:
+            json.dump({}, f)
+    with open(DB_FILE, "r") as f:
+        return json.load(f)
 
-# Handlers
+def save_db(data):
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+# Start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Video", callback_data="add")],
+        [InlineKeyboardButton("📄 List All Videos", callback_data="list")]
+    ]
     await update.message.reply_text(
-        "Hello! I'm your Guangzhou trip assistant.\n\n"
-        "Here are some commands you can try:\n"
-        "/addvideo - Add a new video to your itinerary\n"
-        "/list - List all saved videos\n"
-        "/help - Get help instructions"
+        "👋 Welcome to the Guangzhou trip bot!\n\nYou can:\n- Add videos with hashtags (e.g. #food, #togo)\n- List all saved videos\n- Search by sending a hashtag (e.g. #hotpot)",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Instructions:\n"
-        "1. Use /addvideo to add a video link. After this command, send me the video URL.\n"
-        "2. Use /list to see your saved videos.\n"
-        "3. Use /start to see the main menu anytime."
-    )
+# Handle button actions
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-async def addvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Please send me the video URL you want to add."
-    )
-    # Set user state to expect the next message as video URL
-    context.user_data['expecting_video'] = True
+    user_id = str(query.from_user.id)
+    context.user_data["awaiting_input"] = query.data
 
-async def list_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not video_storage:
-        await update.message.reply_text("No videos saved yet. Use /addvideo to add some.")
-    else:
-        videos_text = "\n".join(f"{idx+1}. {url}" for idx, url in enumerate(video_storage))
-        await update.message.reply_text(f"Here are your saved videos:\n{videos_text}")
-    await update.message.reply_text("You can add more videos with /addvideo or get help with /help.")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Check if expecting a video URL after /addvideo
-    if context.user_data.get('expecting_video'):
-        video_url = update.message.text.strip()
-        # Simple validation (can be improved)
-        if video_url.startswith("http"):
-            video_storage.append(video_url)
-            await update.message.reply_text(f"Video added successfully!\nYou can add another one or type /list to see all.")
+    if query.data == "add":
+        await query.message.reply_text("📎 Send the video link and include hashtags (e.g. https://tiktok.com/... #food #hotpot)")
+    elif query.data == "list":
+        db = load_db()
+        messages = []
+        for uid, items in db.items():
+            for item in items:
+                tags = " ".join(item.get("hashtags", []))
+                messages.append(f"{item['url']} {tags}")
+        if messages:
+            await query.message.reply_text("\n\n".join(messages[:20]))  # show max 20 results
         else:
-            await update.message.reply_text("That doesn't look like a valid URL. Please send a valid video URL.")
-        # Reset state
-        context.user_data['expecting_video'] = False
+            await query.message.reply_text("No videos saved yet!")
+
+# Add videos with hashtags
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    text = update.message.text.strip()
+    db = load_db()
+
+    if context.user_data.get("awaiting_input") == "add":
+        if "http" not in text:
+            await update.message.reply_text("⚠️ Please include a valid link starting with http")
+            return
+
+        hashtags = [word for word in text.split() if word.startswith("#")]
+        video_url = text.split()[0]
+
+        if user_id not in db:
+            db[user_id] = []
+        db[user_id].append({
+            "url": video_url,
+            "hashtags": hashtags
+        })
+        save_db(db)
+
+        await update.message.reply_text("✅ Video saved!\nYou can now search using hashtags like #food or #togo.")
+        context.user_data["awaiting_input"] = None
     else:
-        await update.message.reply_text(f"Received: {update.message.text}\nUse /help for instructions.")
+        # Hashtag search
+        if text.startswith("#"):
+            db = load_db()
+            results = []
+            for items in db.values():
+                for item in items:
+                    if text in item.get("hashtags", []):
+                        results.append(f"{item['url']} {' '.join(item['hashtags'])}")
+            if results:
+                await update.message.reply_text("\n\n".join(results[:20]))
+            else:
+                await update.message.reply_text("❌ No results found for that hashtag.")
+        else:
+            await update.message.reply_text("🤖 Please use the menu or type a hashtag (e.g. #food) to search.")
 
-# Minimal HTTP handler for Render port requirement
-async def handle_root(request):
-    return web.Response(text="Telegram bot is running.")
-
-async def run_web_app():
-    app = web.Application()
-    app.add_routes([web.get('/', handle_root)])
-
-    port = int(os.environ.get("PORT", 10000))  # Render assigns $PORT
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logging.info(f"Web server started on port {port}")
-
-async def main():
+# Main
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("addvideo", addvideo))
-    app.add_handler(CommandHandler("list", list_videos))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-
-    await run_web_app()
-
-    await asyncio.Event().wait()
-
-    await app.updater.stop_polling()
-    await app.stop()
-    await app.shutdown()
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

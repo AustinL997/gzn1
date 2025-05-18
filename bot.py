@@ -32,6 +32,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/addvideo - Add a new video to your itinerary\n"
         "/list - List all saved videos\n"
         "/search - Search videos by hashtags (e.g., /search #food #hotpot)\n"
+        "/editvideo - Edit hashtags of a saved video\n"
+        "/deletevideo - Delete a saved video\n"
         "/clear - Clear bot messages from the chat\n"
         "/help - Get help instructions"
     )
@@ -43,8 +45,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   Example: https://www.tiktok.com/... #food #hotpot\n"
         "2. Use /list to see your saved videos.\n"
         "3. Use /search followed by hashtags to find videos. Example: /search #food #hotpot\n"
-        "4. Use /clear to delete bot messages from the chat.\n"
-        "5. Use /start to see the main menu anytime."
+        "4. Use /editvideo <video_number> <new_hashtags> to update hashtags of a video.\n"
+        "   Example: /editvideo 2 #newtag1 #newtag2\n"
+        "5. Use /deletevideo <video_number> to delete a video from the list.\n"
+        "   Example: /deletevideo 3\n"
+        "6. Use /clear to delete bot messages from the chat.\n"
+        "7. Use /start to see the main menu anytime."
     )
 
 async def addvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -91,13 +97,11 @@ async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     bot = context.bot
 
-    # Delete the command message if possible
     try:
         await bot.delete_message(chat_id=chat.id, message_id=update.message.message_id)
     except Exception as e:
         logging.warning(f"Failed to delete command message: {e}")
 
-    # Fetch recent messages sent by the bot
     try:
         async for message in bot.get_chat_history(chat_id=chat.id, limit=100):
             if message.from_user and message.from_user.id == bot.id:
@@ -108,10 +112,7 @@ async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.warning(f"Failed to fetch chat history: {e}")
 
-    # Send a confirmation message
     confirmation = await update.message.reply_text("🔄 Bot messages have been cleared from the chat.")
-
-    # Optionally delete the confirmation message after a short delay
     await asyncio.sleep(5)
     try:
         await confirmation.delete()
@@ -126,7 +127,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             url = text.split()[0]
             hashtags = [word for word in text.split() if word.startswith("#")]
             video_storage.append({"url": url, "hashtags": hashtags})
-            # Save back to file with {"videos": [...]}
             with open(DB_FILE, "w") as f:
                 json.dump({"videos": video_storage}, f, indent=2)
             await update.message.reply_text("✅ Video added successfully! Use /list to view or /search to find by hashtag.")
@@ -135,6 +135,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['expecting_video'] = False
     else:
         await update.message.reply_text(f"Received: {text}\nUse /help for instructions.")
+
+# New: Edit video hashtags
+async def edit_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /editvideo <video_number> <new_hashtags>")
+        return
+
+    try:
+        video_index = int(args[0]) - 1
+        if video_index < 0 or video_index >= len(video_storage):
+            await update.message.reply_text("Invalid video number.")
+            return
+    except ValueError:
+        await update.message.reply_text("Please provide a valid video number.")
+        return
+
+    new_hashtags = [tag for tag in args[1:] if tag.startswith("#")]
+    if not new_hashtags:
+        await update.message.reply_text("Please provide at least one valid hashtag starting with '#'.")
+        return
+
+    video_storage[video_index]["hashtags"] = new_hashtags
+    with open(DB_FILE, "w") as f:
+        json.dump({"videos": video_storage}, f, indent=2)
+
+    await update.message.reply_text(f"✅ Updated hashtags for video {video_index + 1}.")
+
+# New: Delete video
+async def delete_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("Usage: /deletevideo <video_number>")
+        return
+
+    try:
+        video_index = int(args[0]) - 1
+        if video_index < 0 or video_index >= len(video_storage):
+            await update.message.reply_text("Invalid video number.")
+            return
+    except ValueError:
+        await update.message.reply_text("Please provide a valid video number.")
+        return
+
+    removed_video = video_storage.pop(video_index)
+    with open(DB_FILE, "w") as f:
+        json.dump({"videos": video_storage}, f, indent=2)
+
+    await update.message.reply_text(f"🗑️ Deleted video {video_index + 1}: {removed_video['url']}")
 
 # === Minimal HTTP server for Render ===
 async def handle_root(request):
@@ -161,6 +210,8 @@ async def main():
     app.add_handler(CommandHandler("list", list_videos))
     app.add_handler(CommandHandler("search", search_videos))
     app.add_handler(CommandHandler("clear", clear_chat))
+    app.add_handler(CommandHandler("editvideo", edit_video))
+    app.add_handler(CommandHandler("deletevideo", delete_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await app.initialize()
@@ -169,11 +220,4 @@ async def main():
 
     await run_web_app()
 
-    await asyncio.Event().wait()
-
-    await app.updater.stop_polling()
-    await app.stop()
-    await app.shutdown()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+   

@@ -217,5 +217,5 @@ async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler
-::contentReference[oaicite:0]{index=0}
+
  

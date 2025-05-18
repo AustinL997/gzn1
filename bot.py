@@ -11,7 +11,7 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 
 # Load Telegram token from environment
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("TOKEN not set in environment.")
 
